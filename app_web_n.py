@@ -364,7 +364,7 @@ if page == "🔍  Predict & Test":
         show_cols.insert(2, "True Label")
 
     st.dataframe(
-        results_df[show_cols].style.applymap(_sp, subset=["Prediction"]),
+        results_df[show_cols],
         use_container_width=True,
         hide_index=True,
         column_config={
