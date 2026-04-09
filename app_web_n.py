@@ -240,10 +240,31 @@ with st.sidebar:
     st.markdown("---")
 
     # ── Audio upload ──────────────────────────────────────────────────────────
+    # ── Audio upload ──────────────────────────────────────────────────────────
     st.markdown(
         "<div style='font-size:10px;font-weight:700;letter-spacing:1px;"
         "opacity:0.5;padding:0 4px 6px;text-transform:uppercase;'>Audio Files</div>",
         unsafe_allow_html=True,
+    )
+
+    # ✅ iPhone instruction box (FIXED POSITION)
+    st.markdown(
+        """
+        <div style='background:rgba(37,99,235,0.12);
+                    border-left:3px solid #2563eb;
+                    border-radius:6px;
+                    padding:10px 12px;
+                    font-size:12px;
+                    margin-bottom:10px;'>
+
+        📱 <b>iPhone Users</b><br>
+        • Use <b>Record Audio</b> for quick testing<br>
+        • Or upload from <b>Files app</b> (.m4a supported)<br>
+        • Voice Memos → Share → Save to Files → Upload here
+
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
     has_labels = st.checkbox(
