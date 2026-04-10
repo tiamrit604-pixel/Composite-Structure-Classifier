@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 import librosa
 import librosa.display
 import streamlit as st
+import streamlit.components.v1 as components
 
 from audio_utils import process_uploaded_files, get_plot_data
 from ml_utils import predict_files, predict_segments, CLASSIFIER_CONFIGS
@@ -239,34 +240,12 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ── Audio upload ──────────────────────────────────────────────────────────
-    # ── Audio upload ──────────────────────────────────────────────────────────
+    # ── Audio Files ───────────────────────────────────────────────────────────
     st.markdown(
         "<div style='font-size:10px;font-weight:700;letter-spacing:1px;"
         "opacity:0.5;padding:0 4px 6px;text-transform:uppercase;'>Audio Files</div>",
         unsafe_allow_html=True,
     )
-
-    # ✅ iPhone instruction box (FIXED POSITION)
-    st.markdown(
-        """
-        <div style='background:rgba(37,99,235,0.12);
-                    border-left:3px solid #2563eb;
-                    border-radius:6px;
-                    padding:10px 12px;
-                    font-size:12px;
-                    margin-bottom:10px;'>
-
-        📱 <b>iPhone Users</b><br>
-        • Use <b>Record Audio</b> for quick testing<br>
-        • Or upload from <b>Files app</b> (.m4a supported)<br>
-        • Voice Memos → Share → Save to Files → Upload here
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
     has_labels = st.checkbox(
         "Auto-label by filename",
         value=True,
@@ -280,6 +259,35 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
+    # ── Recorded clips from browser recorder (stored in session_state) ────────
+    if "recorded_clips" not in st.session_state:
+        st.session_state["recorded_clips"] = []   # list of {"name": str, "bytes": bytes}
+
+    n_clips = len(st.session_state["recorded_clips"])
+    if n_clips:
+        st.markdown(
+            f"<div style='background:rgba(37,99,235,0.12);border-radius:6px;"
+            f"padding:7px 12px;font-size:12px;color:#93c5fd;margin:4px 0;'>"
+            f"🎙 {n_clips} browser recording(s) queued</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("🗑 Clear recordings", key="clear_recs"):
+            st.session_state["recorded_clips"] = []
+            st.session_state.pop("_file_key", None)
+            st.rerun()
+
+    # ── iPhone guide ──────────────────────────────────────────────────────────
+    with st.expander("📱 iPhone users — how to upload"):
+        st.markdown("""
+        <div style='font-size:12px;line-height:1.8;color:#1e293b;'>
+        <b>1.</b> Open <b>Voice Memos</b> app → record your tap test<br>
+        <b>2.</b> Tap the recording → ••• menu → <b>Share</b><br>
+        <b>3.</b> Choose <b>Save to Files</b> → pick <i>On My iPhone</i><br>
+        <b>4.</b> Come back here → tap <b>Browse files</b> above → select it<br><br>
+        <span style='opacity:0.6;'>Tip: rename file S1g.m4a (good) or S1b.m4a (bad) before uploading for auto-labelling.</span>
+        </div>
+        """, unsafe_allow_html=True)
+
     st.markdown("---")
     st.markdown("""
     <div style='font-size:11px;opacity:0.55;padding:0 4px;line-height:1.9;'>
@@ -290,12 +298,24 @@ with st.sidebar:
     .m4a · .wav · .mp3 · .ogg · .flac
     </div>""", unsafe_allow_html=True)
 
-# ── Process audio when files change ──────────────────────────────────────────
-if audio_files:
-    file_key = tuple(f.name for f in audio_files)
+# ── Build combined file list: uploaded files + browser recordings ─────────────
+class _Fakefile:
+    """Wrap raw bytes so process_uploaded_files() can .read() them."""
+    def __init__(self, name, data):
+        self.name = name
+        self._data = data
+    def read(self):
+        return self._data
+
+all_sources = list(audio_files or []) + [
+    _Fakefile(c["name"], c["bytes"]) for c in st.session_state.get("recorded_clips", [])
+]
+
+if all_sources:
+    file_key = tuple(f.name for f in all_sources)
     if st.session_state.get("_file_key") != file_key:
-        with st.spinner(f"Segmenting & extracting features from {len(audio_files)} file(s)…"):
-            X, y, meta = process_uploaded_files(audio_files, has_labels=has_labels)
+        with st.spinner(f"Segmenting & extracting features from {len(all_sources)} file(s)…"):
+            X, y, meta = process_uploaded_files(all_sources, has_labels=has_labels)
         st.session_state.update({
             "test_X": X, "test_y": y, "test_meta": meta, "_file_key": file_key
         })
@@ -313,21 +333,187 @@ if page == "🔍  Predict & Test":
          Good (Bonded) or Bad (Debonded).</p>
     </div>""", unsafe_allow_html=True)
 
+    # ── Browser Recorder — zero extra packages, file-based bridge ───────────────
+    section("🎙  RECORD AUDIO DIRECTLY")
+    tip("Record directly in the browser — no download needed. Works alongside file uploads.")
+
+    # Each recording is stored as base64 in session_state["_pending_rec_b64"].
+    # A st.button press triggers the Python side to decode & save it.
+    if "recorded_clips" not in st.session_state:
+        st.session_state["recorded_clips"] = []
+
+    components.html("""
+<style>
+body{margin:0;padding:0;font-family:Inter,sans-serif;}
+#wrap{background:#0f1b2d;border-radius:12px;padding:14px 16px;}
+canvas{width:100%;height:72px;border-radius:8px;background:#0a1628;display:block;margin-bottom:10px;}
+.btn{padding:8px 16px;border:none;border-radius:8px;font-size:13px;font-weight:600;
+     cursor:pointer;margin-right:6px;margin-top:4px;transition:opacity .2s;}
+#b-start{background:#16a34a;color:#fff;}
+#b-stop{background:#dc2626;color:#fff;display:none;}
+#status{font-size:12px;color:#94a3b8;margin-top:8px;line-height:1.6;}
+audio{margin-top:8px;width:100%;border-radius:8px;display:none;}
+</style>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <button class="btn" id="b-start">⏺ Start Recording</button>
+  <button class="btn" id="b-stop">⏹ Stop</button>
+  <div id="status">Press <b style="color:#e2e8f0">Start</b> and perform the tap test.</div>
+  <audio id="prev" controls></audio>
+</div>
+<script>
+const cv=document.getElementById('cv'),
+      ctx2d=cv.getContext('2d'),
+      bStart=document.getElementById('b-start'),
+      bStop=document.getElementById('b-stop'),
+      status=document.getElementById('status'),
+      prev=document.getElementById('prev');
+cv.width=800; cv.height=144;
+
+// ── idle flat line
+function drawIdle(){
+  ctx2d.fillStyle='#0a1628'; ctx2d.fillRect(0,0,cv.width,cv.height);
+  ctx2d.strokeStyle='#1e3a5f'; ctx2d.lineWidth=1.5;
+  ctx2d.beginPath(); ctx2d.moveTo(0,cv.height/2);
+  ctx2d.lineTo(cv.width,cv.height/2); ctx2d.stroke();
+}
+drawIdle();
+
+let mr,chunks=[],animId,analyser,abuf,ac2;
+
+function startViz(stream){
+  ac2=new AudioContext();
+  analyser=ac2.createAnalyser(); analyser.fftSize=512;
+  abuf=new Float32Array(analyser.fftSize);
+  ac2.createMediaStreamSource(stream).connect(analyser);
+  function draw(){
+    animId=requestAnimationFrame(draw);
+    analyser.getFloatTimeDomainData(abuf);
+    // scrolling oscilloscope
+    const img=ctx2d.getImageData(1,0,cv.width-1,cv.height);
+    ctx2d.putImageData(img,0,0);
+    ctx2d.clearRect(cv.width-1,0,1,cv.height);
+    const val=abuf.slice(0,4).reduce((a,b)=>a+Math.abs(b),0)/4;
+    const h=Math.min(val*cv.height*2.5, cv.height/2-1);
+    const cy=cv.height/2;
+    const g=ctx2d.createLinearGradient(0,cy-h,0,cy+h);
+    g.addColorStop(0,'#93c5fd'); g.addColorStop(.5,'#3b82f6'); g.addColorStop(1,'#1e40af');
+    ctx2d.fillStyle=g;
+    ctx2d.fillRect(cv.width-1,cy-h,1,h*2||1);
+  }
+  draw();
+}
+
+bStart.onclick=async()=>{
+  chunks=[];
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    startViz(stream);
+    const mime=['audio/webm;codecs=opus','audio/webm','audio/ogg']
+               .find(t=>MediaRecorder.isTypeSupported(t))||'';
+    mr=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+    mr.ondataavailable=e=>e.data.size>0&&chunks.push(e.data);
+    mr.onstop=()=>{
+      cancelAnimationFrame(animId); drawIdle();
+      ac2&&ac2.close();
+      stream.getTracks().forEach(t=>t.stop());
+      const blob=new Blob(chunks,{type:mr.mimeType||'audio/webm'});
+      prev.src=URL.createObjectURL(blob); prev.style.display='block';
+      // encode to base64 and store in sessionStorage so Streamlit can poll it
+      const reader=new FileReader();
+      reader.onloadend=()=>{
+        sessionStorage.setItem('scp_pending_rec', reader.result);
+        status.innerHTML='✅ Done! Click <b style="color:#e2e8f0">Add Recording</b> button in the app ↓';
+      };
+      reader.readAsDataURL(blob);
+    };
+    mr.start(50);
+    bStart.style.display='none'; bStop.style.display='inline-block';
+    status.innerHTML='🔴 <b style="color:#f87171">Recording…</b> tap the cell now.';
+  }catch(e){status.textContent='⚠️ Mic error: '+e.message;}
+};
+
+bStop.onclick=()=>{
+  mr&&mr.state!=='inactive'&&mr.stop();
+  bStop.style.display='none'; bStart.style.display='inline-block';
+};
+</script>
+""", height=220)
+
+    # Streamlit-side "Add Recording" button — reads from sessionStorage via a
+    # tiny polling component, then stores bytes in session_state.
+    # We use a second components.html that reads sessionStorage and posts back.
+
+    rec_val = st.session_state.get("_pending_rec_b64", "")
+
+    # Bridge textarea — hidden via CSS using a wrapper div with a unique marker
+    st.markdown('<div id="rec-bridge-hide"></div>', unsafe_allow_html=True)
+    st.markdown("""<style>
+    #rec-bridge-hide + div { display:none!important; }
+    </style>""", unsafe_allow_html=True)
+    bridge_area = st.empty()
+    raw_b64 = bridge_area.text_area(
+        "rec_bridge_area", value="", key="rec_b64_area",
+        label_visibility="collapsed", height=1
+    )
+
+    components.html("""
+<script>
+// Poll sessionStorage every 500ms; when a recording appears, push it
+// into the Streamlit text_area via React's internal onChange handler.
+function setNativeValue(el, val){
+  const desc = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value');
+  desc.set.call(el, val);
+  el.dispatchEvent(new Event('input', {bubbles:true}));
+}
+let pushed=false;
+setInterval(()=>{
+  const data=sessionStorage.getItem('scp_pending_rec');
+  if(data && !pushed){
+    pushed=true;
+    const areas=window.parent.document.querySelectorAll('textarea');
+    // find the bridge textarea (it will be empty or have old data)
+    for(const ta of areas){
+      if(ta.value==='' || ta.value.startsWith('data:audio')){
+        setNativeValue(ta, data);
+        sessionStorage.removeItem('scp_pending_rec');
+        break;
+      }
+    }
+  }
+  if(!data) pushed=false;
+},500);
+</script>
+""", height=0)
+
+    if raw_b64 and raw_b64.startswith("data:audio") and        raw_b64 != st.session_state.get("_last_rec_b64",""):
+        import base64 as _b64
+        raw_bytes = _b64.b64decode(raw_b64.split(",",1)[1])
+        n = len(st.session_state["recorded_clips"]) + 1
+        st.session_state["recorded_clips"].append({
+            "name": f"rec_{n:02d}.wav", "bytes": raw_bytes
+        })
+        st.session_state["_last_rec_b64"] = raw_b64
+        st.session_state.pop("_file_key", None)
+        bridge_area.empty()
+        st.success(f"✅ Clip {n} added! Record another or scroll down to see results.")
+        st.rerun()
+
     # Guard: model
     if model is None:
-        st.markdown("""
+        st.markdown('''
         <div class="tip-box">
           👈 <b>Select a model in the sidebar to begin.</b><br><br>
-          <b>Option A — Pre-trained model:</b> The <code>models/</code> The application is already equiped with pre-trained .pkl files. Just pick a classifier from
-          the dropdown — it loads instantly, no upload needed.<br><br>
+          <b>Option A — Pre-trained model:</b> Already equipped with pre-trained .pkl files.
+          Just pick a classifier from the dropdown.<br><br>
           <b>Option B — Upload your own:</b> Run <code>app.py</code> locally to train,
-          then upload any of the four .pkl files from your local <code>models/</code> folder.
-        </div>""", unsafe_allow_html=True)
+          then upload any .pkl from your local <code>models/</code> folder.
+        </div>''', unsafe_allow_html=True)
         st.stop()
 
     # Guard: audio
     if "test_meta" not in st.session_state:
-        tip("Upload audio files in the sidebar to continue.")
+        tip("Use the recorder above or upload files in the sidebar to begin.")
         st.stop()
 
     X    = st.session_state["test_X"]
@@ -344,11 +530,19 @@ if page == "🔍  Predict & Test":
         st.stop()
 
     n_files = len(set(m["filename"] for m in meta if not m.get("error")))
+
+    # Collect unique sample rates across all valid files
+    sr_values = list(set(m["sr"] for m in meta if not m.get("error") and m.get("sr")))
+    sr_display = " / ".join(f"{s:,}" for s in sorted(sr_values)) if sr_values else "—"
+    sr_sub = "Hz — native, no resampling" if len(sr_values) == 1 else "Hz — mixed rates!"
+    sr_kind = "info" if len(sr_values) == 1 else "warn"
+
     section("EXTRACTION SUMMARY")
     metric_row([
         ("Files uploaded",  n_files,       "audio files",  "info"),
         ("Segments found",  X.shape[0],    "total hits",   ""),
         ("Features / seg",  X.shape[1],    "dimensions",   ""),
+        ("Sample Rate",     sr_display,    sr_sub,         sr_kind),
         ("Classifier",      model_label,   "active model", "info"),
     ])
 
